@@ -144,6 +144,7 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
     try {
       const map = await processImageToMap(file);
       onImageUpload(map);
+      onUpdate({ pattern: "image" });
     } catch {
       setUploadError("Could not process image.");
     }
@@ -214,35 +215,36 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
                 </div>
               </Field>
 
-              {/* Image upload — only visible when Image pattern is selected */}
-              {settings.pattern === "image" && (
-                <div style={{ padding: "6px 16px 10px" }}>
-                  <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      style={{
-                        flex: 1, padding: "7px 0", borderRadius: 7, cursor: "pointer", border: "none",
-                        background: ITEM_BG, color: TEXT_SEC, fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                      }}>
-                      Upload Image
-                    </button>
-                    {previewUrl && (
-                      <div style={{ width: 36, height: 36, borderRadius: 5, overflow: "hidden", flexShrink: 0, border: `1px solid ${DIVIDER}` }}>
-                        <img src={previewUrl} alt="preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                      </div>
-                    )}
-                  </div>
-                  {uploadError && <div style={{ fontSize: 10, color: "#e57373", marginTop: 4 }}>{uploadError}</div>}
-                  <div style={{ fontSize: 10, color: TEXT_MUT, marginTop: 5 }}>PNG, JPG, SVG, GIF</div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".svg,.png,.jpg,.jpeg,.gif,.webp"
-                    style={{ display: "none" }}
-                    onChange={handleFileChange}
-                  />
+              {/* Image upload — always visible; uploading auto-switches to Image pattern */}
+              <div style={{ padding: "6px 16px 10px" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                      flex: 1, padding: "7px 0", borderRadius: 7, cursor: "pointer", border: "none",
+                      background: settings.pattern === "image" ? BLUE_ON : ITEM_BG,
+                      color: settings.pattern === "image" ? "#fff" : TEXT_SEC,
+                      fontFamily: FONT, fontSize: 11, fontWeight: 500,
+                      transition: "background 0.15s, color 0.15s",
+                    }}>
+                    {previewUrl ? "Replace Image" : "Upload Image"}
+                  </button>
+                  {previewUrl && (
+                    <div style={{ width: 36, height: 36, borderRadius: 5, overflow: "hidden", flexShrink: 0, border: `1px solid ${DIVIDER}` }}>
+                      <img src={previewUrl} alt="preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    </div>
+                  )}
                 </div>
-              )}
+                {uploadError && <div style={{ fontSize: 10, color: "#e57373", marginTop: 4 }}>{uploadError}</div>}
+                <div style={{ fontSize: 10, color: TEXT_MUT, marginTop: 5 }}>PNG, JPG, SVG, GIF · uploading switches to Image pattern</div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".svg,.png,.jpg,.jpeg,.gif,.webp"
+                  style={{ display: "none" }}
+                  onChange={handleFileChange}
+                />
+              </div>
 
               {/* Density */}
               <SliderField label="Density" value={densityPct} min={0} max={100} step={1}

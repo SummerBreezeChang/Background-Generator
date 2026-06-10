@@ -6,9 +6,11 @@ A fully interactive, real-time generative ASCII art background builder — a cre
 
 ## Features
 
-### Two Rendering Modes
+### Three Rendering Modes
 
 **Flat Mode** renders a static 2D grid of ASCII characters shaped by Fractional Brownian Motion (FBM) noise — a multi-octave value noise function that creates organic cloud-like density fields. The grid redraws only when settings change, keeping performance overhead near zero.
+
+**Live Mode** animates the FBM-shaped ASCII grid through a continuous render loop, modulating each character's position and opacity with time-driven sine waves for flowing, wave-like motion. A delta-time clock keeps speed consistent across refresh rates, and the loop pauses on hidden tabs or reduced-motion preferences.
 
 **3D Particle Mode** builds clusters of floating characters projected through a perspective camera. Clusters drift via sine oscillation and particles orbit their cluster centers independently. A continuous Y-axis rotation sweeps the whole scene so characters cycle between foreground and background, naturally changing apparent size through perspective depth scaling.
 

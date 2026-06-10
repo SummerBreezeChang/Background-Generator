@@ -6,7 +6,7 @@ import { PresetBar, MAX_PRESETS, type DrawPreset } from "./components/PresetBar"
 import { ExportModal } from "./components/ExportModal";
 
 export interface Settings {
-  dimension: "flat" | "3d";
+  dimension: "flat" | "flat-anim" | "3d";
   pattern: "organic" | "grid" | "dots" | "lines" | "image";
   charSet: "standard" | "dots_set" | "steps" | "lines_only" | "binary" | "boxes" | "light" | "numbers" | "letters" | "custom";
   customChars: string;
@@ -15,7 +15,7 @@ export interface Settings {
   baseSize: number;     // 4–32px
   minSize: number;      // 4–20px (3D only)
   sizeRange: boolean;   // 3D only
-  zoom: number;         // 50–400%
+  zoom: number;         // Legacy export field; visual scale is controlled by baseSize
   colorMode: "mono" | "duo" | "trio";
   color1: string;
   color2: string;
@@ -36,34 +36,55 @@ export interface ImageDensityMap {
   h: number;
 }
 
+const SETTINGS_KEY = "ascii-bg-settings-v1";
+
+const DEFAULT_SETTINGS: Settings = {
+  dimension: "flat",
+  pattern: "organic",
+  charSet: "numbers",
+  customChars: "▲△■□●○◆◇",
+  density: 1,
+  speed: 1,
+  baseSize: 14,
+  minSize: 6,
+  sizeRange: true,
+  zoom: 100,
+  colorMode: "duo",
+  color1: "#e040fb",
+  color2: "#40c4ff",
+  color3: "#ffffff",
+  gradientDir: "diagonal",
+  colorOpacity: 1,
+  colorSaturation: 1,
+  angle: 0,
+  charAngle: 0,
+  bgMode: "solid",
+  bgColor1: "#06071a",
+  bgColor2: "#1a0a2e",
+};
+
+function loadSettings(): Settings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    const saved = JSON.parse(raw) as Partial<Settings>;
+    // Merge saved over defaults so new keys always have a value
+    return { ...DEFAULT_SETTINGS, ...saved, zoom: 100 };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
 export default function App() {
-  const [settings, setSettings] = useState<Settings>({
-    dimension: "flat",
-    pattern: "organic",
-    charSet: "numbers",
-    customChars: "▲△■□●○◆◇",
-    density: 1,
-    speed: 1,
-    baseSize: 14,
-    minSize: 6,
-    sizeRange: true,
-    zoom: 100,
-    colorMode: "duo",
-    color1: "#e040fb",
-    color2: "#40c4ff",
-    color3: "#ffffff",
-    gradientDir: "diagonal",
-    colorOpacity: 1,
-    colorSaturation: 1,
-    angle: 0,
-    charAngle: 0,
-    bgMode: "solid",
-    bgColor1: "#06071a",
-    bgColor2: "#1a0a2e",
-  });
+  const [settings, setSettings] = useState<Settings>(loadSettings);
 
   const settingsRef = useRef<Settings>(settings);
   settingsRef.current = settings;
+
+  // Persist settings to localStorage whenever they change
+  useEffect(() => {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+  }, [settings]);
 
   const imageDensityMapRef = useRef<ImageDensityMap | null>(null);
 
@@ -165,9 +186,33 @@ export default function App() {
   }
 
   // ── Draw preset handlers ───────────────────────────────────────────────────
+  function handleToggleDrawMode() {
+    const turningOff = isDrawMode;
+    setIsDrawMode(d => !d);
+    // When turning draw off, revert from the image pattern it applied
+    if (turningOff && settingsRef.current.pattern === "image") {
+      imageDensityMapRef.current = null;
+      setSettings(prev => {
+        const next = { ...prev, pattern: "organic" as const };
+        settingsRef.current = next;
+        return next;
+      });
+      setRebuildTrigger(t => t + 1);
+    }
+  }
+
   function handleClearStrokes() {
     drawCanvasRef.current?.clearCanvas();
-    // ASCII pattern stays visible — user can draw more strokes on the empty canvas
+    imageDensityMapRef.current = null;
+    // Revert pattern if stuck in image mode from a previous draw
+    if (settingsRef.current.pattern === "image") {
+      setSettings(prev => {
+        const next = { ...prev, pattern: "organic" as const };
+        settingsRef.current = next;
+        return next;
+      });
+    }
+    setRebuildTrigger(t => t + 1);
   }
 
   function handleSavePreset() {
@@ -296,7 +341,7 @@ export default function App() {
         onUpdate={updateSettings}
         onImageUpload={handleImageUpload}
         isDrawMode={isDrawMode}
-        onToggleDrawMode={() => setIsDrawMode(d => !d)}
+        onToggleDrawMode={handleToggleDrawMode}
         brushSize={brushSize}
         onBrushSize={setBrushSize}
         onExport={() => setShowExport(true)}

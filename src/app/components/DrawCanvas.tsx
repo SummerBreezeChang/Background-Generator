@@ -2,6 +2,7 @@ import { useRef, useEffect, forwardRef, useImperativeHandle } from "react";
 import type { ImageDensityMap } from "../App";
 
 const MAP_SIZE = 64;
+const FADE_DURATION = 1800; // ms — time for strokes to fade after mouse release
 
 export interface DrawCanvasHandle {
   clearCanvas:   () => void;
@@ -23,6 +24,7 @@ export const DrawCanvas = forwardRef<DrawCanvasHandle, Props>(
     brushRef.current  = brushSize;
     const onDrawRef   = useRef(onDraw);
     onDrawRef.current = onDraw;
+    const fadeRafRef  = useRef<number>(0);
 
     // Keep canvas intrinsic size matching its CSS display size
     useEffect(() => {
@@ -40,7 +42,7 @@ export const DrawCanvas = forwardRef<DrawCanvasHandle, Props>(
       sync();
       const ro = new ResizeObserver(sync);
       ro.observe(canvas);
-      return () => ro.disconnect();
+      return () => { ro.disconnect(); cancelAnimationFrame(fadeRafRef.current); };
     }, []);
 
     function computeMap(canvas: HTMLCanvasElement): ImageDensityMap {
@@ -54,8 +56,35 @@ export const DrawCanvas = forwardRef<DrawCanvasHandle, Props>(
       return { data, w: MAP_SIZE, h: MAP_SIZE };
     }
 
+    function cancelFade() {
+      cancelAnimationFrame(fadeRafRef.current);
+      const c = canvasRef.current;
+      if (c) c.style.opacity = "1";
+    }
+
+    function startFade() {
+      cancelAnimationFrame(fadeRafRef.current);
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const start = performance.now();
+      function tick(now: number) {
+        const t = Math.min((now - start) / FADE_DURATION, 1);
+        // ease-out: quick start, slow finish so faint trails linger longer
+        const opacity = 1 - t * t;
+        canvas.style.opacity = String(opacity);
+        if (t < 1) {
+          fadeRafRef.current = requestAnimationFrame(tick);
+        } else {
+          canvas.getContext("2d")!.clearRect(0, 0, canvas.width, canvas.height);
+          canvas.style.opacity = "1";
+        }
+      }
+      fadeRafRef.current = requestAnimationFrame(tick);
+    }
+
     useImperativeHandle(ref, () => ({
       clearCanvas() {
+        cancelFade();
         const c = canvasRef.current;
         if (c) c.getContext("2d")!.clearRect(0, 0, c.width, c.height);
       },
@@ -114,9 +143,12 @@ export const DrawCanvas = forwardRef<DrawCanvasHandle, Props>(
       isDrawing.current = false;
       lastPos.current   = null;
       onDrawRef.current(computeMap(canvasRef.current));
+      startFade();
     }
 
     function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+      // Cancel any ongoing fade — existing strokes stay, new stroke adds on top
+      cancelFade();
       isDrawing.current = true;
       const p = getPos(e);
       lastPos.current = p;

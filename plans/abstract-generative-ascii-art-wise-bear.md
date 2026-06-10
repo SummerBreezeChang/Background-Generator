@@ -1,83 +1,83 @@
-# Plan: Control Panel Reorganization
+# Plan: Animated Flat Mode ("Live" Dimension)
 
 ## Context
 
-The current control panel has three collapsible sections (MEDIA SETTINGS, ASCII SETTINGS, COLORS), all open by default. The layout doesn't match the natural authoring workflow — image upload is buried inside the first section, draw tool is mixed with shape settings, and all sections expanded at once creates cognitive overload. The user wants a restructured panel with clearer section headings, logical ordering that mirrors the creative workflow, and sections collapsed by default so users open only what they need.
+The app currently has two dimension modes: **Flat** (static 2D grid, redraws only when settings change) and **3D** (animated floating particles). The user wants a third mode between them — a **live 2D grid** that keeps the flat character grid but adds continuous, pattern-linked animation. Each pattern type gets its own animation style so the motion feels native to the shape (pulse, fabric warp, ripple rings, equalizer bars, shimmer).
 
-## Goal
+## New Dimension Option
 
-- Reorder controls into 5 logical sections matching the creative workflow sequence
-- All sections **collapsed by default** (open only on user click)
-- **Bigger, more legible section headers** (replace the tiny 10px uppercase labels)
-- Image upload lives inside SHAPE (since "Image" is a pattern type)
-- Draw tool gets its own dedicated DRAW section
-- Reduce visual clutter / cognitive overload
+Add `"flat-anim"` to the `dimension` union in `Settings` (`src/app/App.tsx`):
+```ts
+dimension: "flat" | "flat-anim" | "3d"
+```
 
-## New Section Order & Contents
+ControlPanel Dimension buttons change from `["flat","3d"]` to `["flat","flat-anim","3d"]` with display labels `["Flat","Live","3D"]`.
 
-### 1. SHAPE
-- Pattern type selector: Organic | Grid | Dots | Lines | Image
-- Image upload area + thumbnail preview — visible only when "Image" pattern is selected
-- Density slider
+**Motion section label logic** after the change:
+- Scale slider: label = `"Scale"` when `dimension !== "3d"`, else `"Zoom"`
+- Speed slider: label = `"Spacing"` when `dimension === "flat"` only, else `"Speed"`
+- Size Range / min / max: visible only when `dimension === "3d"` (unchanged)
 
-### 2. CHARACTER
-- Character set dropdown (Numbers, Standard, Dots, Steps, Lines, Binary, Boxes, Light, Letters, Custom)
-- Custom chars text input + char counter (when Custom selected)
-- Character preview bar
-- Size slider (4–32px)
-- Dimension: Flat | 3D button group
-- Enable Size Range toggle (3D only)
-- Min / Max dual sliders (3D + sizeRange only)
+## Per-Pattern Animation Styles
 
-### 3. DRAW
-- Draw Pattern toggle
-- Brush Size slider (visible only when Draw is on)
+`t = ts × 0.001 × s.speed` (timestamp in seconds × user speed control)
 
-### 4. MOTION
-- Scale / Zoom slider — label switches by dimension ("Scale" in Flat, "Zoom" in 3D)
-- Spacing / Speed slider — label switches by dimension ("Spacing" in Flat, "Speed" in 3D)
-- Pattern Angle slider (0–360°)
-- Char Angle slider (0–360°)
+| Pattern  | Name         | Effect |
+|----------|-------------|--------|
+| Organic  | **Pulse**   | `animOpacity = 0.35 + 0.65 × (0.5 + 0.5 × sin(t + fbm(col/visCols×3, row/visRows×3) × 6.28))` — cells pulse at different phases driven by their noise value, organic breathing |
+| Grid     | **Fabric**  | `dx = sin(t×0.9 + row×0.4) × cellW×0.6`, `dy = cos(t×0.7 + col×0.35) × cellH×0.4`; `animOpacity = 0.6 + 0.4 × sin(t + col×0.2 + row×0.15)` — grid warps like crumpled fabric |
+| Dots     | **Ripple**  | 5 fixed anchors `[w×0.25,h×0.35]`, `[w×0.75,h×0.65]`, `[w×0.5,h×0.5]`, `[w×0.15,h×0.72]`, `[w×0.85,h×0.28]`; `animOpacity = 0.5 + 0.5 × sin(minDist×0.04 − t×2.5)` using pixel-space distance to nearest anchor |
+| Lines    | **Equalizer**| `barFill = 0.5 + 0.5 × sin(t×1.8 + col×0.2)`; render char only if `row >= visRows × (1 − barFill)` — bars rise from bottom per column like an audio spectrum |
+| Image    | **Shimmer** | `phase = frac(sin(col×127.1 + row×311.7) × 43758.5453) × 6.28`; `animOpacity = 0.4 + 0.6 × (0.5 + 0.5 × sin(t×1.5 + phase))` — density map shape holds; individual chars shimmer independently |
 
-### 5. COLORS
-- Color mode: Mono | Duo | Trio
-- Color pickers (1–3 based on mode)
-- Gradient preview bar
-- Gradient direction: Diagonal | Horizontal | Vertical | Radial
-- Opacity slider
-- Saturation slider
-- Background sub-section: Gradient toggle + color pickers + preview bar
+## Files to Modify
 
-## Section Header Style Change
+### 1. `src/app/App.tsx`
+- Extend `dimension` type: `"flat" | "flat-anim" | "3d"`
 
-Replace the current `CollapseSection` heading style (10px, uppercase, faint) with a more prominent style:
-- Font size: **13px** (up from 10px)
-- Font weight: **600**
-- Color: **rgba(255,255,255,0.88)** (up from ~0.55 TEXT_SEC)
-- Subtle left accent bar: `borderLeft: "2px solid rgba(74,108,247,0.7)"`, padding-left 10px
-- Keep ∨ / › expand chevron on the right
+### 2. `src/app/components/AsciiBackground.tsx`
 
-## Default State Change
+**Add `drawFlatAnimMode(ctx, w, h, s, lut, ts, drawingMap)`** after the existing `drawFlatMode`:
+- Identical background fill + scale/spacing/cell-size/rotation/padding setup as `drawFlatMode`
+- Uses `fbm` (already defined in the file) for Organic phase offsets
+- Uses the same hash function (`Math.sin(col*127.1 + row*311.7) * 43758.5453`) for Shimmer per-cell phases
+- Inside the grid loop: compute per-pattern `animOpacity` and `dx`/`dy` using the table above
+- Final opacity: `clamp(strength × animOpacity × s.colorOpacity, 0, 1)`
+- Draw at `(drawX + dx, drawY + dy)` — charAngle rotation path unchanged
+- The equalizer branch: skip drawing entirely when row is above the bar height
 
-All 5 sections start **closed**. Change all `useState(true)` → `useState(false)` for the section open/close state variables. Rename: `shapesOpen` → `shapeOpen`, add `charOpen`, `drawOpen`, `motionOpen`, keep `colorsOpen`.
+**Update RAF `tick` function** — add branch between flat and 3D:
+```ts
+if (s.dimension === "flat") {
+  // existing fKey branch — unchanged
+} else if (s.dimension === "flat-anim") {
+  wasFlatRef.current = false;
+  drawFlatAnimMode(ctx, w, h, s, gradientLUTRef.current, ts, imageMap);
+  if (!reducedMotion) rafRef.current = requestAnimationFrame(tick);
+  return;
+} else {
+  // existing 3D branch — unchanged
+}
+```
+`reducedMotion` / visibility pause guards apply identically to the new branch.
 
-## File to Modify
-
-**`src/app/components/ControlPanel.tsx`** — all changes contained here:
-1. Update `CollapseSection` sub-component for the new heading style
-2. Change all section `useState` initial values to `false`
-3. Rename/add the 5 state variables for the 5 sections
-4. Reorder JSX into the 5 sections above — no logic changes, structural only
-5. Move image upload block inside SHAPE (conditioned on `s.pattern === "image"`)
-6. Move Draw toggle + Brush Size into dedicated DRAW section
-7. Group Scale/Zoom, Spacing/Speed, and both Angle sliders into MOTION section
-8. Keep the Export button fixed at the bottom outside all sections
+### 3. `src/app/components/ControlPanel.tsx`
+- Dimension button array: `["flat","flat-anim","3d"]`, labels `["Flat","Live","3D"]`
+- Scale slider label: `s.dimension === "3d" ? "Zoom" : "Scale"`
+- Speed slider label: `s.dimension === "flat" ? "Spacing" : "Speed"`
+- Size Range / min / max guard: `s.dimension === "3d"` (currently `!isFlat` — update to `s.dimension === "3d"`)
 
 ## Verification
 
-1. Panel renders with all 5 sections collapsed on load — only bold titles visible
-2. Clicking a section header expands it and shows its controls
-3. Image upload appears only when "Image" pattern is selected (inside SHAPE)
-4. Brush Size appears only when Draw toggle is on (inside DRAW)
-5. Scale/Spacing labels switch correctly between Flat and 3D modes
-6. Export button remains visible at the bottom at all times
+1. Three buttons in Dimension row: Flat · Live · 3D — all three selectable
+2. Live mode runs a continuous animation loop; switching to Flat freezes it immediately
+3. Each pattern produces a distinct animation:
+   - Organic → soft organic breathing across the field
+   - Grid → grid surface distorts like fabric/cloth
+   - Dots → concentric ring waves from the 5 anchor points
+   - Lines → per-column equalizer bars rising and falling
+   - Image/Draw → characters shimmer while density-map shape is preserved
+4. Speed slider changes animation rate visibly in Live mode
+5. All other controls (colors, angle, density, char set) work correctly in Live mode
+6. `prefers-reduced-motion` stops Live animation (one static frame rendered, then stopped)
+7. Tab visibility pause/resume works correctly in Live mode

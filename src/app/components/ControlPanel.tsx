@@ -84,8 +84,7 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
   const [patternDropOpen, setPatternDropOpen] = useState(false);
 
   // Character open by default so users can start experimenting immediately
-  const [shapeOpen,  setShapeOpen]  = useState(false);
-  const [charOpen,   setCharOpen]   = useState(true);  // open
+  const [charOpen,   setCharOpen]   = useState(true);
   const [drawOpen,   setDrawOpen]   = useState(false);
   const [motionOpen, setMotionOpen] = useState(false);
   const [colorsOpen, setColorsOpen] = useState(false);
@@ -193,72 +192,11 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
 
           <div style={{ flex: 1, overflowY: "auto", paddingBottom: 8 }}>
 
-            {/* ── 1. SHAPE ── */}
-            <Section title="Shape" open={shapeOpen} onToggle={() => setShapeOpen(o => !o)}>
-
-              {/* Pattern type */}
-              <Field label="Type">
-                <div ref={patternDropRef} style={{ position: "relative" }}>
-                  <DropBtn onClick={() => setPatternDropOpen(o => !o)} isOpen={patternDropOpen}>
-                    {activePattern.label}
-                  </DropBtn>
-                  {patternDropOpen && (
-                    <DropList>
-                      {PATTERNS.map(p => (
-                        <DropItem key={p.id} selected={settings.pattern === p.id}
-                          onClick={() => { onUpdate({ pattern: p.id }); setPatternDropOpen(false); }}>
-                          {p.label}
-                        </DropItem>
-                      ))}
-                    </DropList>
-                  )}
-                </div>
-              </Field>
-
-              {/* Image upload — always visible; uploading auto-switches to Image pattern */}
-              <div style={{ padding: "6px 16px 10px" }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    style={{
-                      flex: 1, padding: "7px 0", borderRadius: 7, cursor: "pointer", border: "none",
-                      background: settings.pattern === "image" ? BLUE_ON : ITEM_BG,
-                      color: settings.pattern === "image" ? "#fff" : TEXT_SEC,
-                      fontFamily: FONT, fontSize: 11, fontWeight: 500,
-                      transition: "background 0.15s, color 0.15s",
-                    }}>
-                    {previewUrl ? "Replace Image" : "Upload Image"}
-                  </button>
-                  {previewUrl && (
-                    <div style={{ width: 36, height: 36, borderRadius: 5, overflow: "hidden", flexShrink: 0, border: `1px solid ${DIVIDER}` }}>
-                      <img src={previewUrl} alt="preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    </div>
-                  )}
-                </div>
-                {uploadError && <div style={{ fontSize: 10, color: "#e57373", marginTop: 4 }}>{uploadError}</div>}
-                <div style={{ fontSize: 10, color: TEXT_MUT, marginTop: 5 }}>PNG, JPG, SVG, GIF · uploading switches to Image pattern</div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".svg,.png,.jpg,.jpeg,.gif,.webp"
-                  style={{ display: "none" }}
-                  onChange={handleFileChange}
-                />
-              </div>
-
-              {/* Density */}
-              <SliderField label="Density" value={densityPct} min={0} max={100} step={1}
-                display={`${densityPct}%`} onChange={v => onUpdate({ density: 0.4 + (v / 100) * 1.6 })} />
-
-            </Section>
-
-            <Sep />
-
-            {/* ── 2. CHARACTER ── */}
+            {/* ── 1. CHARACTER ── */}
             <Section title="Character" open={charOpen} onToggle={() => setCharOpen(o => !o)}>
 
               {/* Character set dropdown */}
-              <div ref={charDropRef} style={{ position: "relative", padding: "0 16px 8px" }}>
+              <div ref={charDropRef} style={{ position: "relative", padding: "6px 16px 8px" }}>
                 <DropBtn onClick={() => setCharDropOpen(o => !o)} isOpen={charDropOpen} wide>
                   <span>{activeChar?.label ?? "Custom"}</span>
                   <span style={{ color: TEXT_MUT, fontSize: 10, marginLeft: 6, fontFamily: "'Courier New', monospace" }}>
@@ -283,7 +221,6 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
               {/* Custom character editor */}
               {isCustomChar && (
                 <div style={{ padding: "0 16px 10px" }}>
-                  <div style={{ fontSize: 10, color: TEXT_MUT, marginBottom: 5, letterSpacing: "0.08em" }}>Edit characters</div>
                   <input
                     type="text"
                     className="cp-text-input"
@@ -297,7 +234,7 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
                 </div>
               )}
 
-              {/* Preview */}
+              {/* Character preview */}
               <div style={{ padding: "0 16px 10px" }}>
                 <div style={{
                   fontFamily: "'Courier New', monospace", fontSize: 13, color: TEXT_PRI,
@@ -308,33 +245,39 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
                 </div>
               </div>
 
-              {/* Size */}
-              <SliderField label="Size" value={settings.baseSize} min={4} max={32} step={1}
-                display={`${settings.baseSize}px`} onChange={v => onUpdate({ baseSize: v })} />
+              <div style={{ height: 1, background: DIVIDER, margin: "6px 0 2px" }} />
 
               {/* Dimension */}
               <Field label="Dimension">
                 <div style={{ display: "flex", gap: 4 }}>
-                  {(["flat", "3d"] as const).map(d => (
-                    <button key={d} onClick={() => onUpdate({ dimension: d })} style={{
+                  {([
+                    { id: "flat",      label: "Flat" },
+                    { id: "flat-anim", label: "Live" },
+                    { id: "3d",        label: "3D"   },
+                  ] as const).map(({ id, label }) => (
+                    <button key={id} onClick={() => onUpdate({ dimension: id })} style={{
                       padding: "4px 11px", borderRadius: 6, cursor: "pointer",
-                      background: settings.dimension === d ? TEXT_PRI : WELL_BG,
-                      color: settings.dimension === d ? "#fff" : TEXT_SEC,
+                      background: settings.dimension === id ? TEXT_PRI : WELL_BG,
+                      color: settings.dimension === id ? "#fff" : TEXT_SEC,
                       border: "none", fontFamily: FONT, fontSize: 11, fontWeight: 500,
                     }}>
-                      {d === "flat" ? "Flat" : "3D"}
+                      {label}
                     </button>
                   ))}
                 </div>
               </Field>
 
-              {!isFlat && (
+              {/* Size */}
+              <SliderField label="Size" value={settings.baseSize} min={4} max={32} step={1}
+                display={`${settings.baseSize}px`} onChange={v => onUpdate({ baseSize: v })} />
+
+              {/* Size Range (3D only) */}
+              {settings.dimension === "3d" && (
                 <Field label="Size Range">
                   <Toggle on={settings.sizeRange} onToggle={() => onUpdate({ sizeRange: !settings.sizeRange })} />
                 </Field>
               )}
-
-              {!isFlat && settings.sizeRange && (
+              {settings.dimension === "3d" && settings.sizeRange && (
                 <div style={{ padding: "2px 16px 6px" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <div>
@@ -350,6 +293,61 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
                   </div>
                 </div>
               )}
+
+              {/* Density */}
+              <SliderField label="Density" value={densityPct} min={0} max={100} step={1}
+                display={`${densityPct}%`} onChange={v => onUpdate({ density: 0.4 + (v / 100) * 1.6 })} />
+
+              <div style={{ height: 1, background: DIVIDER, margin: "6px 0 8px" }} />
+
+              {/* Image upload */}
+              <div style={{ padding: "0 16px 8px" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                      flex: 1, padding: "7px 0", borderRadius: 7, cursor: "pointer", border: "none",
+                      background: settings.pattern === "image" ? BLUE_ON : ITEM_BG,
+                      color: settings.pattern === "image" ? "#fff" : TEXT_SEC,
+                      fontFamily: FONT, fontSize: 11, fontWeight: 500,
+                      transition: "background 0.15s, color 0.15s",
+                    }}>
+                    {previewUrl ? "Replace Image" : "Upload Image"}
+                  </button>
+                  {previewUrl && (
+                    <div style={{ width: 32, height: 32, borderRadius: 5, overflow: "hidden", flexShrink: 0, border: `1px solid ${DIVIDER}` }}>
+                      <img src={previewUrl} alt="preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    </div>
+                  )}
+                </div>
+                {uploadError && <div style={{ fontSize: 10, color: "#e57373", marginTop: 4 }}>{uploadError}</div>}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".svg,.png,.jpg,.jpeg,.gif,.webp"
+                  style={{ display: "none" }}
+                  onChange={handleFileChange}
+                />
+              </div>
+
+              {/* Pattern type */}
+              <Field label="Pattern">
+                <div ref={patternDropRef} style={{ position: "relative" }}>
+                  <DropBtn onClick={() => setPatternDropOpen(o => !o)} isOpen={patternDropOpen}>
+                    {activePattern.label}
+                  </DropBtn>
+                  {patternDropOpen && (
+                    <DropList>
+                      {PATTERNS.map(p => (
+                        <DropItem key={p.id} selected={settings.pattern === p.id}
+                          onClick={() => { onUpdate({ pattern: p.id }); setPatternDropOpen(false); }}>
+                          {p.label}
+                        </DropItem>
+                      ))}
+                    </DropList>
+                  )}
+                </div>
+              </Field>
 
             </Section>
 
@@ -388,19 +386,14 @@ export function ControlPanel({ settings, onUpdate, onImageUpload, isDrawMode, on
             {/* ── 4. MOTION ── */}
             <Section title="Motion" open={motionOpen} onToggle={() => setMotionOpen(o => !o)}>
 
-              <SliderField
-                label={isFlat ? "Scale" : "Zoom"}
-                value={settings.zoom} min={50} max={400} step={5}
-                display={`${Math.round(settings.zoom)}%`}
-                onChange={v => onUpdate({ zoom: v })}
-              />
-
-              <SliderField
-                label={isFlat ? "Spacing" : "Speed"}
-                value={settings.speed} min={0.2} max={3.0} step={0.1}
-                display={`${settings.speed.toFixed(1)}×`}
-                onChange={v => onUpdate({ speed: v })}
-              />
+              {settings.dimension !== "flat" && (
+                <SliderField
+                  label="Speed"
+                  value={settings.speed} min={0.2} max={3.0} step={0.1}
+                  display={`${settings.speed.toFixed(1)}×`}
+                  onChange={v => onUpdate({ speed: v })}
+                />
+              )}
 
               <SliderField
                 label="Pattern Angle"

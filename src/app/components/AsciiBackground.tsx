@@ -290,6 +290,75 @@ function buildParticles(clusters: ClusterCenter[], s: Settings, now: number): As
   return particles;
 }
 
+// ─── Flat / Live shared strength function ────────────────────────────────────
+// Returns 0 → skip cell; >0 → draw with this strength (0–1)
+
+function flatStrength(
+  pattern: Settings["pattern"],
+  col: number, row: number,
+  visCols: number, visRows: number,
+  nsx: number, nsy: number,
+  density: number,
+  drawingMap: { data: number[]; w: number; h: number } | null
+): number {
+  if (drawingMap) {
+    const mx  = clamp(Math.floor((col / visCols) * drawingMap.w), 0, drawingMap.w - 1);
+    const my  = clamp(Math.floor((row / visRows) * drawingMap.h), 0, drawingMap.h - 1);
+    const val = drawingMap.data[my * drawingMap.w + mx] ?? 0;
+    return val < 0.04 ? 0 : val;
+  }
+
+  const nx = col / visCols, ny = row / visRows;
+  const densityT = (density - 0.4) / 1.6; // 0–1
+
+  switch (pattern) {
+    case "organic": {
+      const threshold = lerp(0.65, 0.22, densityT);
+      const n = fbm(col * nsx, row * nsy, 5);
+      if (n < threshold) return 0;
+      return (n - threshold) / (1.0 - threshold);
+    }
+    case "grid": {
+      // Regular grid intersection dots — tight circles at crossing points
+      const gCols = Math.round(5 + density * 3), gRows = Math.round(4 + density * 2);
+      const fx = ((nx * gCols) % 1 + 1) % 1;
+      const fy = ((ny * gRows) % 1 + 1) % 1;
+      const distX = Math.min(fx, 1 - fx) * 2;
+      const distY = Math.min(fy, 1 - fy) * 2;
+      const dist  = Math.sqrt(distX * distX + distY * distY);
+      const dotR  = lerp(0.38, 0.70, densityT);
+      if (dist > dotR) return 0;
+      return (dotR - dist) / dotR;
+    }
+    case "dots": {
+      // Telephone keypad — 12 fixed positions in a 3×4 grid
+      let maxS = 0;
+      for (const [fx, fy] of KEYPAD_NORM) {
+        const d = Math.hypot(nx - fx, ny - fy);
+        const r = lerp(0.09, 0.16, densityT);
+        const s = clamp(1 - d / r, 0, 1);
+        if (s > maxS) maxS = s;
+      }
+      return maxS;
+    }
+    case "lines": {
+      // Horizontal sine-wave strips
+      const lineCount = Math.round(3 + density * 3);
+      let maxS = 0;
+      for (let l = 0; l < lineCount; l++) {
+        const waveY = (l + 0.5) / lineCount + Math.sin(nx * Math.PI * 4 + l * 1.3) * 0.04;
+        const dist  = Math.abs(ny - waveY);
+        const width = lerp(0.030, 0.072, densityT);
+        const s     = clamp(1 - dist / width, 0, 1);
+        if (s > maxS) maxS = s;
+      }
+      return maxS;
+    }
+    default:
+      return 0;
+  }
+}
+
 // ─── Flat mode renderer ───────────────────────────────────────────────────────
 
 function drawFlatMode(
@@ -310,19 +379,16 @@ function drawFlatMode(
   }
   ctx.fillRect(0, 0, w, h);
 
-  // Scale (zoom) controls character size; Spacing (speed) controls gap between characters
-  const scaleFactor   = s.zoom / 100;
-  const spacingFactor = clamp(s.speed, 0.2, 3.0);
-  const charPx = Math.round(s.baseSize * scaleFactor);
-  const cellW  = s.baseSize * 1.1 * scaleFactor * spacingFactor;
-  const cellH  = s.baseSize * 1.6 * scaleFactor * spacingFactor;
+  // Size controls character size and cell spacing. Speed never affects layout.
+  const charPx = Math.round(s.baseSize);
+  const cellW  = s.baseSize * 1.1;
+  const cellH  = s.baseSize * 1.6;
 
   // Visible grid dimensions (no rotation padding)
   const visCols = Math.ceil(w / cellW) + 1;
   const visRows = Math.ceil(h / cellH) + 1;
   const nsx = 2.0 / Math.max(1, visCols);
   const nsy = 2.0 / Math.max(1, visRows);
-  const threshold = lerp(0.65, 0.22, (s.density - 0.4) / 1.6);
 
   // Angle: rotate context around canvas center; extend grid to fill all edges
   const angleRad     = ((s.angle     ?? 0) * Math.PI) / 180;
@@ -349,19 +415,8 @@ function drawFlatMode(
 
   for (let row = rowStart; row < rowEnd; row++) {
     for (let col = colStart; col < colEnd; col++) {
-      let strength: number;
-
-      if (drawingMap) {
-        const mx  = clamp(Math.floor((col / visCols) * drawingMap.w), 0, drawingMap.w - 1);
-        const my  = clamp(Math.floor((row / visRows) * drawingMap.h), 0, drawingMap.h - 1);
-        const val = drawingMap.data[my * drawingMap.w + mx] ?? 0;
-        if (val < 0.04) continue;
-        strength = val;
-      } else {
-        const n = fbm(col * nsx, row * nsy, 5);
-        if (n < threshold) continue;
-        strength = (n - threshold) / (1.0 - threshold);
-      }
+      const strength = flatStrength(s.pattern, col, row, visCols, visRows, nsx, nsy, s.density, drawingMap);
+      if (strength <= 0) continue;
 
       // Gradient direction → LUT index (using visible-normalised coords)
       let tGrad: number;
@@ -396,6 +451,192 @@ function drawFlatMode(
         if (fill !== lastFill) { ctx.fillStyle = fill; lastFill = fill; }
         ctx.globalAlpha = opacity;
         ctx.fillText(cellChar(col, row, pool), col * cellW, row * cellH + charPx);
+      }
+    }
+  }
+
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+// ─── Animated flat mode renderer ─────────────────────────────────────────────
+
+// 12 telephone-keypad positions (3 cols × 4 rows), normalised 0–1
+const KEYPAD_NORM: readonly [number, number][] = [
+  [0.25, 0.20], [0.50, 0.20], [0.75, 0.20],
+  [0.25, 0.40], [0.50, 0.40], [0.75, 0.40],
+  [0.25, 0.60], [0.50, 0.60], [0.75, 0.60],
+  [0.25, 0.80], [0.50, 0.80], [0.75, 0.80],
+];
+
+function drawFlatAnimMode(
+  ctx: CanvasRenderingContext2D,
+  w: number, h: number,
+  s: Settings,
+  lut: string[],
+  ts: number,
+  drawingMap: { data: number[]; w: number; h: number } | null = null
+) {
+  // Background
+  if (s.bgMode === "gradient") {
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, s.bgColor1);
+    grad.addColorStop(1, s.bgColor2);
+    ctx.fillStyle = grad;
+  } else {
+    ctx.fillStyle = s.bgColor1;
+  }
+  ctx.fillRect(0, 0, w, h);
+
+  // Speed controls animation rate only; Size controls character size and cell spacing.
+  const charPx = Math.round(s.baseSize);
+  const cellW  = s.baseSize * 1.1;
+  const cellH  = s.baseSize * 1.6;
+
+  const visCols = Math.ceil(w / cellW) + 1;
+  const visRows = Math.ceil(h / cellH) + 1;
+  const nsx = 2.0 / Math.max(1, visCols);
+  const nsy = 2.0 / Math.max(1, visRows);
+
+  const angleRad     = ((s.angle     ?? 0) * Math.PI) / 180;
+  const charAngleRad = ((s.charAngle ?? 0) * Math.PI) / 180;
+  const useCharRot   = Math.abs(charAngleRad) > 0.001;
+  const diag    = Math.sqrt(w * w + h * h);
+  const padCols = Math.ceil((diag - w) / 2 / cellW) + 2;
+  const padRows = Math.ceil((diag - h) / 2 / cellH) + 2;
+
+  ctx.font = `${charPx}px 'Courier New', monospace`;
+  const pool = charPool(s);
+  const ccx = visCols / 2, ccy = visRows / 2;
+  let lastFill = "";
+
+  // t in seconds from an accumulated motion clock; Speed changes the clock rate only.
+  const t = ts * 0.001;
+
+  ctx.save();
+  if (Math.abs(angleRad) > 0.001) {
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(angleRad);
+    ctx.translate(-w / 2, -h / 2);
+  }
+
+  const colStart = -padCols, colEnd = visCols + padCols;
+  const rowStart = -padRows, rowEnd = visRows + padRows;
+
+  for (let row = rowStart; row < rowEnd; row++) {
+    for (let col = colStart; col < colEnd; col++) {
+      const strength = flatStrength(s.pattern, col, row, visCols, visRows, nsx, nsy, s.density, drawingMap);
+      if (strength <= 0) continue;
+
+      let animOpacity = 1;
+      let dx = 0, dy = 0;
+
+      switch (s.pattern) {
+
+        case "organic": {
+          // Open-water current — slowly rotating flow field like a school of fish banking
+          const flowAngle = Math.sin(t * 0.14) * Math.PI * 0.75;
+          const spatial   = col * 0.22 + row * 0.08;
+          const wave      = Math.sin(spatial - t * 1.9);
+          const swell     = Math.sin(col * 0.09 + row * 0.14 + t * 0.6) * 0.45;
+          dx = Math.cos(flowAngle) * wave * cellW * 0.70;
+          dy = Math.sin(flowAngle) * wave * cellH * 0.55 + swell * cellH * 0.35;
+          animOpacity = 0.22 + 0.78 * (0.5 + 0.5 * Math.sin(spatial - t * 1.5));
+          break;
+        }
+
+        case "grid": {
+          // Coral polyps — current sweeps through, each polyp extends then retracts
+          const gCols   = Math.round(5 + s.density * 3), gRows = Math.round(4 + s.density * 2);
+          const gCol    = Math.round((col / visCols) * gCols);
+          const gRow    = Math.round((row / visRows) * gRows);
+          // Wave front travels left to right with slight diagonal tilt
+          const current = Math.sin(t * 1.3 - gCol * 0.55 + gRow * 0.18);
+          dx = current * cellW * 0.65;
+          // Polyp extends upward as wave passes, then retracts
+          dy = -Math.max(0, current) * cellH * 1.1;
+          animOpacity = 0.38 + 0.62 * (0.5 + 0.5 * current);
+          break;
+        }
+
+        case "dots": {
+          // Jellyfish colony — each bell contracts and expands, rising as it pulses
+          const nx = col / visCols, ny = row / visRows;
+          let closestKey = 0, minD = Infinity;
+          for (let k = 0; k < KEYPAD_NORM.length; k++) {
+            const d = Math.hypot(nx - KEYPAD_NORM[k][0], ny - KEYPAD_NORM[k][1]);
+            if (d < minD) { minD = d; closestKey = k; }
+          }
+          const jellyPhase = closestKey * 0.52;
+          const bell       = 0.5 + 0.5 * Math.sin(t * 1.15 + jellyPhase); // 0=contracted 1=expanded
+          const [fx, fy]   = KEYPAD_NORM[closestKey];
+          const dirNX      = nx - fx, dirNY = ny - fy; // direction from jelly centre
+          // Expanded: bell spreads radially and rises; contracted: dense, bright, sinks back
+          dx = dirNX * w * 0.10 * bell;
+          dy = dirNY * h * 0.07 * bell - bell * cellH * 0.90; // radial spread + upward pulse
+          animOpacity = 0.12 + 0.88 * (1 - bell * 0.60);
+          break;
+        }
+
+        case "lines": {
+          // Kelp / seaweed — ribbons anchored at bottom, maximum sway at top
+          const ny          = row / visRows;           // 0=top 1=bottom
+          const swayFactor  = 1 - ny;                 // full sway at top, none at bottom
+          const lineCount   = Math.round(3 + s.density * 3);
+          const stripI      = Math.floor(ny * lineCount);
+          const stripPhase  = stripI * 0.85;
+          const sway        = Math.sin(t * 1.05 + stripPhase + col * 0.018);
+          dx = sway * cellW * swayFactor * 3.2;
+          dy = Math.sin(t * 0.72 + col * 0.045) * cellH * 0.22;
+          animOpacity = 0.32 + 0.68 * (0.65 + 0.35 * Math.abs(sway));
+          break;
+        }
+
+        default: {
+          // Image / draw — water caustics: interference from three drifting wave sources
+          const nx  = col / visCols, ny = row / visRows;
+          const c1  = Math.sin(Math.hypot(nx - (0.3 + Math.sin(t * 0.28) * 0.14), ny - 0.38) * 18 - t * 2.0);
+          const c2  = Math.sin(Math.hypot(nx - (0.70 + Math.cos(t * 0.22) * 0.12), ny - 0.62) * 22 - t * 1.65);
+          const c3  = Math.sin(Math.hypot(nx - 0.5, ny - (0.5 + Math.sin(t * 0.18) * 0.20)) * 15 - t * 2.3) * 0.6;
+          animOpacity = 0.12 + 0.88 * (0.5 + 0.5 * clamp((c1 + c2 + c3) / 2.6, -1, 1));
+          break;
+        }
+
+      }
+
+      // Gradient LUT index
+      let tGrad: number;
+      switch (s.gradientDir) {
+        case "horizontal": tGrad = clamp(col / visCols, 0, 1); break;
+        case "vertical":   tGrad = clamp(row / visRows, 0, 1); break;
+        case "radial": {
+          const rdx = (col - ccx) / (visCols * 0.5), rdy = (row - ccy) / (visRows * 0.5);
+          tGrad = clamp(Math.sqrt(rdx * rdx + rdy * rdy) / Math.SQRT2, 0, 1);
+          break;
+        }
+        default: tGrad = clamp((col / visCols) * 0.5 + (row / visRows) * 0.5, 0, 1);
+      }
+      const lutIdx = Math.round(tGrad * 255);
+
+      // Same base-opacity floor as drawFlatMode so cells are never near-invisible
+      const baseOpacity = strength * 0.35 + 0.75;
+      const opacity = clamp(baseOpacity * animOpacity * s.colorOpacity, 0.02, 1.0);
+      const fill    = lut[lutIdx] ?? lut[0];
+
+      if (useCharRot) {
+        const tx = col * cellW + dx + charPx * 0.3;
+        const ty = row * cellH + dy + charPx * 0.45;
+        ctx.save();
+        ctx.globalAlpha = opacity;
+        ctx.fillStyle   = fill;
+        ctx.translate(tx, ty);
+        ctx.rotate(charAngleRad);
+        ctx.fillText(cellChar(col, row, pool), -charPx * 0.3, charPx * 0.45);
+        ctx.restore();
+      } else {
+        if (fill !== lastFill) { ctx.fillStyle = fill; lastFill = fill; }
+        ctx.globalAlpha = opacity;
+        ctx.fillText(cellChar(col, row, pool), col * cellW + dx, row * cellH + dy + charPx);
       }
     }
   }
@@ -460,6 +701,12 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
 
     let lastFontSize = -1;
     let lastLutIdx   = -1;
+    let lastFrameTs  = 0;
+    let motionTs     = 0;
+
+    // Respect prefers-reduced-motion: draw one static frame, then stop scheduling
+    const mql = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reducedMotion = mql.matches;
 
     function tick(ts: number) {
       const canvas = canvasRef.current, wrapper = wrapperRef.current;
@@ -469,8 +716,13 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
 
       const s = settingsRef.current;
       const isFlat = s.dimension === "flat";
+      const isFlatAnim = s.dimension === "flat-anim";
+      const isAnimated = !isFlat;
+      const dt = lastFrameTs ? Math.min(64, Math.max(0, ts - lastFrameTs)) : 0;
+      lastFrameTs = ts;
+      if (isAnimated && !reducedMotion) motionTs += dt * s.speed;
 
-      // Always keep LUT current (used by both modes)
+      // Always keep LUT current (used by all modes)
       const key = lutKey(s);
       if (key !== activeLUTKeyRef.current) {
         gradientLUTRef.current = buildGradientLUT(s.colorMode, s.color1, s.color2, s.color3, s.colorSaturation);
@@ -479,16 +731,16 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
         activeFlatKeyRef.current = ""; // force flat redraw on color change
       }
 
-      // ── FLAT MODE ─────────────────────────────────────────────────────────
+      // ── FLAT MODE (static) ────────────────────────────────────────────────
       if (isFlat) {
-        // Force redraw when transitioning from 3D → flat
+        // Force redraw when transitioning from animated → flat
         if (!wasFlatRef.current) {
           activeFlatKeyRef.current = "";
           wasFlatRef.current = true;
         }
 
         const fKey = [
-          w, h, s.baseSize, s.density, s.zoom, s.speed, s.angle, s.charAngle, s.gradientDir,
+          w, h, s.baseSize, s.density, s.angle, s.charAngle, s.gradientDir,
           s.pattern, s.charSet, s.customChars,
           s.colorMode, s.color1, s.color2, s.color3,
           s.colorOpacity, s.colorSaturation,
@@ -501,7 +753,16 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
           drawFlatMode(ctx, w, h, s, gradientLUTRef.current, flatDrawMap);
         }
 
-        rafRef.current = requestAnimationFrame(tick);
+        if (!reducedMotion) rafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+
+      // ── FLAT-ANIM MODE (animated 2D grid) ─────────────────────────────────
+      if (isFlatAnim) {
+        wasFlatRef.current = false;
+        const flatDrawMap = s.pattern === "image" ? imageDensityMapRef.current : null;
+        drawFlatAnimMode(ctx, w, h, s, gradientLUTRef.current, motionTs, flatDrawMap);
+        if (!reducedMotion) rafRef.current = requestAnimationFrame(tick);
         return;
       }
 
@@ -520,14 +781,14 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
         activeCustomCharsRef.current = s.customChars;
       }
 
-      const { speed, baseSize, minSize, sizeRange, zoom } = s;
+      const { baseSize, minSize, sizeRange } = s;
+      const frameStep = dt / 16.6667;
       const focal = 500, cx = w / 2, cy = h / 2;
       const angleOffset    = ((s.angle     ?? 0) * Math.PI) / 180;
       const charAngle3d    = ((s.charAngle ?? 0) * Math.PI) / 180;
       const useCharRot3d   = Math.abs(charAngle3d) > 0.001;
-      const rotAngle = ts * 0.00004 * speed + angleOffset;
+      const rotAngle = motionTs * 0.00004 + angleOffset;
       const cosA = Math.cos(rotAngle), sinA = Math.sin(rotAngle);
-      const zoomFactor = zoom / 100;
 
       // Background
       const bgKey = `${s.bgMode}|${s.bgColor1}|${s.bgColor2}|${w}|${h}`;
@@ -557,14 +818,14 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
       const lut = gradientLUTRef.current;
 
       for (const c of clusters) {
-        c.x = c.baseX + Math.sin(ts * c.speed * speed + c.phase) * c.ampX;
-        c.y = c.baseY + Math.cos(ts * c.speed * speed * 0.7 + c.phase) * c.ampY;
+        c.x = c.baseX + Math.sin(motionTs * c.speed + c.phase) * c.ampX;
+        c.y = c.baseY + Math.cos(motionTs * c.speed * 0.7 + c.phase) * c.ampY;
       }
 
       for (const p of particles) {
-        const ox = Math.sin(ts * p.freqX * speed + p.phaseX) * p.ampX;
-        const oy = Math.cos(ts * p.freqY * speed + p.phaseY) * p.ampY;
-        p.baseX += p.vx * speed; p.baseY += p.vy * speed;
+        const ox = Math.sin(motionTs * p.freqX + p.phaseX) * p.ampX;
+        const oy = Math.cos(motionTs * p.freqY + p.phaseY) * p.ampY;
+        p.baseX += p.vx * frameStep * s.speed; p.baseY += p.vy * frameStep * s.speed;
         const margin = 50;
         if (p.baseX < -margin) p.baseX += w + margin * 2;
         else if (p.baseX > w + margin) p.baseX -= w + margin * 2;
@@ -589,12 +850,8 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
         // so switching patterns never changes character scale.
         const depthT = sizeRange ? clamp((scale - 0.5) / 1.5, 0, 1) : 1;
         const baseFS = lerp(minSize, baseSize, depthT);
-        const drawFontSize = Math.max(4, baseFS * zoomFactor);
+        const drawFontSize = Math.max(4, baseFS);
         const drawAlpha = clamp(p.opacity * Math.min(1.5, scale * 1.1) * s.colorOpacity, 0.02, 1);
-
-        // Zoom around canvas center
-        drawX = cx + (drawX - cx) * zoomFactor;
-        drawY = cy + (drawY - cy) * zoomFactor;
 
         // Gradient direction
         let tGrad: number;
@@ -638,17 +895,50 @@ export function AsciiBackground({ settingsRef, rebuildTrigger, imageDensityMapRe
       }
 
       ctx.globalAlpha = 1;
-      rafRef.current = requestAnimationFrame(tick);
+      if (!reducedMotion) rafRef.current = requestAnimationFrame(tick);
     }
 
     rafRef.current = requestAnimationFrame(tick);
+
     const ro = new ResizeObserver(() => {
       cancelAnimationFrame(rafRef.current);
       init();
       rafRef.current = requestAnimationFrame(tick);
     });
     ro.observe(wrapper);
-    return () => { cancelAnimationFrame(rafRef.current); ro.disconnect(); };
+
+    // Pause loop when tab is hidden, resume without resetting state
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(rafRef.current);
+      } else if (!reducedMotion) {
+        lastFrameTs = 0;
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // Live-update when the user changes their OS motion preference
+    const onMotionPref = (e: MediaQueryListEvent) => {
+      reducedMotion = e.matches;
+      if (!reducedMotion && !document.hidden) {
+        // Preference turned off — restart the loop without counting paused time
+        lastFrameTs = 0;
+        rafRef.current = requestAnimationFrame(tick);
+      } else if (reducedMotion) {
+        // Preference turned on — draw one static frame then stop
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    mql.addEventListener("change", onMotionPref);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      ro.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
+      mql.removeEventListener("change", onMotionPref);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rebuildTrigger]);
 

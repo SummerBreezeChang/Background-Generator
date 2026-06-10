@@ -118,6 +118,16 @@ The canvas and draw overlay are wrapped in a CSS-transformed div. Zoom is cursor
 
 The exporter serializes the current `Settings` object into a `const C = {...}` block, resolves the character pool to a plain string constant, and serializes the density map as inline data if the current pattern is image/draw. The full rendering engine — noise functions, LUT builder, cluster builders, particle builder, animation loop, and ResizeObserver — is then inlined into the output file. No runtime dependencies. The React variant wraps everything in a named export functional component; the HTML variant uses an IIFE with vanilla JS.
 
+### Your background is ready — one self-contained .tsx file, no dependencies.
+
+1. Save it as components/AsciiBackground.tsx
+2. Use it:
+     <AsciiBackground fullPage={false} />   ← behind a section (needs a position:relative parent)
+     <AsciiBackground />                     ← full-page backdrop (page bg must be transparent)
+3. Keep the "use client" line. On strict TypeScript, add ! to canvas refs (canvas!.width).
+
+Re-export anytime to restyle — just overwrite the file.
+
 ---
 
 ## Tech Stack
